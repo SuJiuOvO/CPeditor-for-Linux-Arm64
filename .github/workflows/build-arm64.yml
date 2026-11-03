@@ -2,6 +2,10 @@ name: Build CP Editor for Linux ARM64
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build-arm64:
@@ -66,45 +70,46 @@ jobs:
 
       - name: Package DEB & Standalone Portable TAR.GZ
         run: |
-          # 1. 临时打包目录
+          # 1. 临时安装目录
           mkdir -p package_root
           DESTDIR=$(pwd)/package_root cmake --install build
 
-          # 将编译好的 KDE 语法高亮动态库一并打包（目标设备无需再自己编译 KF6）
+          # 将编译好的 KDE 语法高亮动态库一并打包
           mkdir -p package_root/usr/lib
           find /usr -name "libKF6SyntaxHighlighting.so*" -exec cp -d {} package_root/usr/lib/ \; 2>/dev/null || true
 
-          # 2. 构建 .deb 安装包
+          # 2. 构建 .deb 控制文件
           mkdir -p package_root/DEBIAN
-          cat << 'EOF' > package_root/DEBIAN/control
-Package: cpeditor
-Version: 7.3.0
-Section: devel
-Priority: optional
-Architecture: arm64
-Depends: libc6, libqt6widgets6, libqt6core5compat6, libqt6network6
-Maintainer: cpeditor
-Description: CP Editor - The IDE for competitive programming (Linux ARM64 build)
-EOF
+          {
+            echo "Package: cpeditor"
+            echo "Version: 7.3.0"
+            echo "Section: devel"
+            echo "Priority: optional"
+            echo "Architecture: arm64"
+            echo "Depends: libc6, libqt6widgets6, libqt6core5compat6, libqt6network6"
+            echo "Maintainer: cpeditor"
+            echo "Description: CP Editor - The IDE for competitive programming (Linux ARM64 build)"
+          } > package_root/DEBIAN/control
 
           dpkg-deb --build package_root cpeditor-7.3.0-linux-arm64.deb
 
-          # 3. 构建免安装便携版 tar.gz
+          # 3. 构建免安装便携版
           mkdir -p cpeditor-portable/bin cpeditor-portable/lib
           cp package_root/usr/bin/cpeditor cpeditor-portable/bin/
           find /usr -name "libKF6SyntaxHighlighting.so*" -exec cp -d {} cpeditor-portable/lib/ \; 2>/dev/null || true
 
-          cat << 'EOF' > cpeditor-portable/cpeditor.sh
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"
-exec "$SCRIPT_DIR/bin/cpeditor" "$@"
-EOF
+          {
+            echo '#!/bin/bash'
+            echo 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+            echo 'export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"'
+            echo 'exec "$SCRIPT_DIR/bin/cpeditor" "$@"'
+          } > cpeditor-portable/cpeditor.sh
+
           chmod +x cpeditor-portable/cpeditor.sh cpeditor-portable/bin/cpeditor
 
           tar -czvf cpeditor-7.3.0-linux-arm64.tar.gz -C cpeditor-portable .
 
-          # 归档至 dist 目录供下载
+          # 归档到 dist 目录
           mkdir -p dist
           mv cpeditor-7.3.0-linux-arm64.deb dist/
           mv cpeditor-7.3.0-linux-arm64.tar.gz dist/
