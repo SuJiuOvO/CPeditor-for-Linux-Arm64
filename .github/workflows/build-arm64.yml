@@ -1,0 +1,117 @@
+name: Build CP Editor for Linux ARM64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-arm64:
+    name: Build Linux ARM64 Package
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout CP Editor Repository
+        uses: actions/checkout@v4
+        with:
+          repository: cpeditor/cpeditor
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            git \
+            python3 \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-5compat-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            libqt6core5compat6 \
+            libgl1-mesa-dev
+
+      - name: Build and Install KDE Extra CMake Modules (ECM)
+        run: |
+          git clone --depth=1 https://github.com/KDE/extra-cmake-modules.git
+          cd extra-cmake-modules
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_HTML_DOCS=OFF \
+            -DBUILD_MAN_DOCS=OFF \
+            -DBUILD_QTHELP_DOCS=OFF \
+            -DBUILD_TESTING=OFF
+          cmake --build build -j$(nproc)
+          sudo cmake --install build
+          cd ..
+
+      - name: Build and Install KDE KF6 Syntax Highlighting
+        run: |
+          git clone --depth=1 https://github.com/KDE/syntax-highlighting.git
+          cd syntax-highlighting
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DQT_MAJOR_VERSION=6 \
+            -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build -j$(nproc)
+          sudo cmake --install build
+          cd ..
+
+      - name: Configure and Build CP Editor
+        run: |
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build -j$(nproc)
+
+      - name: Package DEB & Standalone Portable TAR.GZ
+        run: |
+          # 1. 临时打包目录
+          mkdir -p package_root
+          DESTDIR=$(pwd)/package_root cmake --install build
+
+          # 将编译好的 KDE 语法高亮动态库一并打包（目标设备无需再自己编译 KF6）
+          mkdir -p package_root/usr/lib
+          find /usr -name "libKF6SyntaxHighlighting.so*" -exec cp -d {} package_root/usr/lib/ \; 2>/dev/null || true
+
+          # 2. 构建 .deb 安装包
+          mkdir -p package_root/DEBIAN
+          cat << 'EOF' > package_root/DEBIAN/control
+Package: cpeditor
+Version: 7.3.0
+Section: devel
+Priority: optional
+Architecture: arm64
+Depends: libc6, libqt6widgets6, libqt6core5compat6, libqt6network6
+Maintainer: cpeditor
+Description: CP Editor - The IDE for competitive programming (Linux ARM64 build)
+EOF
+
+          dpkg-deb --build package_root cpeditor-7.3.0-linux-arm64.deb
+
+          # 3. 构建免安装便携版 tar.gz
+          mkdir -p cpeditor-portable/bin cpeditor-portable/lib
+          cp package_root/usr/bin/cpeditor cpeditor-portable/bin/
+          find /usr -name "libKF6SyntaxHighlighting.so*" -exec cp -d {} cpeditor-portable/lib/ \; 2>/dev/null || true
+
+          cat << 'EOF' > cpeditor-portable/cpeditor.sh
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"
+exec "$SCRIPT_DIR/bin/cpeditor" "$@"
+EOF
+          chmod +x cpeditor-portable/cpeditor.sh cpeditor-portable/bin/cpeditor
+
+          tar -czvf cpeditor-7.3.0-linux-arm64.tar.gz -C cpeditor-portable .
+
+          # 归档至 dist 目录供下载
+          mkdir -p dist
+          mv cpeditor-7.3.0-linux-arm64.deb dist/
+          mv cpeditor-7.3.0-linux-arm64.tar.gz dist/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpeditor-7.3.0-linux-arm64
+          path: dist/*
+          retention-days: 7
